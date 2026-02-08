@@ -8,8 +8,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UV_SYSTEM_PYTHON=1 \
     GOOGLE_CLOUD_PROJECT="" \
     GOOGLE_CLOUD_LOCATION="us-central1" \
-    VERTEX_AI_MODEL_NAME="gemini-1.5-pro" \
-    VERTEX_AI_EMBEDDING_MODEL="textembedding-gecko@001" \
+    VERTEX_AI_MODEL_NAME="gemini-2.5-flash-lite" \
+    VERTEX_AI_EMBEDDING_MODEL="text-embedding-004" \
     API_PORT=8000
 
 # Install uv
@@ -24,7 +24,7 @@ COPY pyproject.toml uv.lock ./
 COPY src/ ./src/
 RUN uv sync --frozen --no-dev --system
 
-COPY patients.json .
+# Data dir: mount host data at runtime, e.g. -v "$(pwd)/data:/app/data"
 RUN mkdir -p data
 
 # Create credentials directory (mount service account key here)
