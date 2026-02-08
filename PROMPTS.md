@@ -1,100 +1,166 @@
 # Prompt Engineering Strategy
 
-This document explains the system prompt design for the Clinical Decision Support Agent.
+This document explains the system prompt design for both agents in the Clinical Decision Support system.
 
-## System Prompt Location
+---
 
-The system prompt lives in `src/agent.py` as the `SYSTEM_PROMPT` constant and is passed to Gemini via `system_instruction` at model initialisation time.
+## 1. Assessment Agent (`src/agent.py`)
 
-## Design Goals
+### Location
+
+`SYSTEM_PROMPT` constant in `src/agent.py`, passed via `system_instruction` at model init.
+
+### Design Goals
 
 | Goal | How the prompt achieves it |
 |---|---|
-| **Grounded in evidence** | The agent is explicitly told to base assessments on NG12 text returned by `search_clinical_guidelines`, not general medical knowledge. |
+| **Grounded in evidence** | The agent must base assessments on NG12 text returned by `search_clinical_guidelines`, not general medical knowledge. |
 | **Structured output** | A strict JSON schema is defined in the prompt so the response can be parsed programmatically. |
-| **Transparent reasoning** | The `reasoning` field forces the model to explain its clinical logic, making assessments auditable. |
+| **Transparent reasoning** | The `reasoning` field forces the model to explain its clinical logic. |
 | **Citation accuracy** | The prompt requires page numbers and section titles from the guideline passages. |
-| **Safety-first** | The "when in doubt, choose higher urgency" rule encodes the precautionary principle. |
+| **Safety-first** | "When in doubt, choose higher urgency" encodes the precautionary principle. |
 
-## Prompt Structure
+### Prompt Structure: Role → Workflow → Rules → Output
 
-The prompt follows a **Role → Workflow → Rules → Output** pattern:
+#### 1. Role Definition
+A concise identity statement naming the specific guideline (NG12) and task (risk assessment) to keep the model in domain.
 
-### 1. Role Definition
+#### 2. Workflow (Step-by-step)
+```
+1. RETRIEVE — Call get_patient_data(patient_id)
+2. SEARCH  — Call search_clinical_guidelines(query)  (one or more times)
+3. ANALYSE — Compare patient presentation against criteria
+4. ASSESS  — Determine the risk category
+```
+Explicit ordering prevents the model from answering before gathering data. "One or more times" allows the model to cover multiple cancer pathways.
+
+#### 3. Assessment Categories
+Three tiers matching the NG12 document: Urgent Referral (2-week wait), Urgent Investigation, Routine.
+
+#### 4. Rules
+- Evidence-only reasoning
+- Multi-factor matching (age, gender, smoking, duration, combinations)
+- Precautionary principle
+
+#### 5. Output Schema
+A concrete JSON example with field types shown by example for reliable parsing.
+
+### Temperature: 0.1
+Clinical assessments must be deterministic. A small amount of temperature allows nuanced reasoning.
+
+### Function Declaration Design
+
+**`get_patient_data`** — Simple single-parameter tool. Description lists exact fields returned.
+
+**`search_clinical_guidelines`** — Description mentions "semantic search" and "NICE NG12". Query parameter includes example queries. `top_k` is optional with default.
+
+---
+
+## 2. Chat Agent (`src/chat.py`)
+
+### Location
+
+`CHAT_SYSTEM_PROMPT` constant in `src/chat.py`, passed via `system_instruction` at model init.
+
+### Design Goals
+
+| Goal | How the prompt achieves it |
+|---|---|
+| **Evidence-only answers** | "Base every answer on the CONTEXT passages. Do NOT use general medical knowledge." |
+| **Mandatory citations** | "Include an inline citation in the format [NG12 p.XX]." |
+| **Graceful refusal** | Explicit refusal template: "I couldn't find support in the NG12 text for that..." |
+| **No hallucination** | "Never fabricate thresholds, age cut-offs, or referral criteria." |
+| **Multi-turn awareness** | "You support multi-turn conversations — the user may ask follow-up questions." |
+| **Structured output** | JSON schema with answer + citations array. |
+
+### Prompt Structure: Role → Rules → Output
+
+The chat prompt is simpler than the assessment prompt because the chat agent doesn't use function calling — retrieval is done server-side before the prompt is built.
+
+#### 1. Role Definition
+```
+You are a clinical guideline assistant specialising in the NICE NG12 guidelines.
+```
+"Assistant" (not "agent") because this mode is answering questions, not making clinical decisions.
+
+#### 2. Rules (5 key constraints)
+1. **Evidence-only** — use only the provided CONTEXT passages
+2. **Cite sources** — inline `[NG12 p.XX]` format
+3. **Refuse gracefully** — explicit template for insufficient evidence
+4. **Do not invent** — no fabricated thresholds or criteria
+5. **Be concise** — answer directly, then supporting detail
+
+These rules are numbered for emphasis and to make each constraint individually clear to the model.
+
+#### 3. Output Schema
+JSON with `answer` (containing inline citations) and `citations` array (source, page, chunk_id, excerpt).
+
+### Why no function calling?
+
+The chat agent performs RAG retrieval server-side before calling Gemini, for three reasons:
+
+1. **Simpler** — the user's message already IS the search query; no need for the model to formulate one
+2. **Faster** — one LLM call instead of a multi-turn function-calling loop
+3. **More controllable** — the server decides how many passages to retrieve (`top_k`)
+
+### Context Assembly
+
+The prompt injected into each chat call has three sections:
 
 ```
-You are a clinical decision support agent specialising in cancer risk
-assessment using the NICE NG12 guidelines...
+CONTEXT:
+--- [chunk_0] Page 40 | Section title ---
+(guideline text)
+
+CONVERSATION HISTORY:
+USER: previous question
+ASSISTANT: previous answer
+
+USER QUESTION: new question
 ```
 
-A concise identity statement. By naming the specific guideline (NG12) and the task (risk assessment), we prime the model to stay in domain and avoid hallucinating advice from other frameworks.
+The CONTEXT block uses chunk IDs and page numbers so the model can cite them. The HISTORY block includes the last 20 messages (10 turns) to support follow-up questions.
 
-### 2. Workflow (Step-by-step)
+### Temperature: 0.2
+Slightly higher than the assessment agent (0.1) because chat answers benefit from more natural language, while still being grounded in evidence.
+
+### Refusal Behaviour
+
+The prompt explicitly instructs the model to refuse when evidence is insufficient, with a template:
 
 ```
-1. RETRIEVE — Call get_patient_data(patient_id) ...
-2. SEARCH  — Call search_clinical_guidelines(query) ...
-3. ANALYSE — Compare the patient's presentation against ...
-4. ASSESS  — Determine the appropriate risk category.
+"I couldn't find support in the NG12 text for that. The retrieved passages cover: ..."
 ```
 
-Explicit ordering is critical for function-calling agents. Without it, the model may attempt to answer before gathering data. Each step names the exact tool to call and what to do with the result.
+This prevents the model from defaulting to its training data when the vector store doesn't contain relevant passages.
 
-**Why multiple searches?** The prompt says "one or more times" because a patient with multiple symptoms (e.g. hemoptysis + fatigue) may match guidelines in different sections. Allowing repeated search calls lets the agent cover all relevant pathways.
+---
 
-### 3. Assessment Categories
+## Comparison
 
-Three tiers are defined with clear clinical meanings:
+| Aspect | Assessment Agent | Chat Agent |
+|---|---|---|
+| System prompt | `SYSTEM_PROMPT` in `agent.py` | `CHAT_SYSTEM_PROMPT` in `chat.py` |
+| Interaction | Function calling (multi-turn) | Single generation call |
+| RAG | Model decides what to search | Server retrieves before calling model |
+| Output | Structured risk assessment JSON | Natural language + citations JSON |
+| Temperature | 0.1 | 0.2 |
+| Memory | Stateless (per-request) | Stateful (session history) |
+| Refusal | N/A (always produces assessment) | Explicit refusal when evidence is insufficient |
 
-- **Urgent Referral** — maps to the NG12 "suspected cancer pathway referral" (2-week wait)
-- **Urgent Investigation** — further tests needed but not full referral criteria
-- **Routine** — no urgent action required per NG12
+---
 
-These match the categories used in the NG12 document itself, so the model can directly map guideline language to output categories.
+## Iteration History
 
-### 4. Rules
+### Assessment prompt
+1. **v1** — Basic instruction. Problem: model answered without calling tools.
+2. **v2** — Added explicit workflow. Problem: single generic search query.
+3. **v3** (current) — Example queries in tool descriptions, "one or more times". Model now makes targeted searches.
 
-Key constraints:
+### Chat prompt
+1. **v1** (current) — Evidence-only rules, citation format, refusal template, conversation history support. Designed based on lessons from the assessment prompt.
 
-- **Evidence-only reasoning** — prevents the model from using training-data medical knowledge that may conflict with or go beyond NG12.
-- **Multi-factor matching** — instructs the model to consider age, gender, smoking history, duration, and symptom combinations (all factors the NG12 uses for its criteria).
-- **Precautionary principle** — in ambiguous cases, escalate rather than downplay.
-
-### 5. Output Schema
-
-A concrete JSON example is provided. This is more reliable than describing the schema in prose because the model can pattern-match against it. The field types (int, float, string, array) are shown by example.
-
-## Temperature Choice
-
-`temperature=0.1` is used because:
-
-- Clinical assessments must be **deterministic and reproducible**.
-- We want the model to follow the structured output format reliably.
-- A small amount of temperature (vs 0.0) allows the model to express nuanced reasoning without being overly rigid.
-
-## Function Declaration Design
-
-The two tool declarations are designed to give the model enough context to use them correctly:
-
-### `get_patient_data`
-- Simple single-parameter tool.
-- Description mentions the exact fields returned (age, gender, symptoms, etc.) so the model knows what data it will get.
-
-### `search_clinical_guidelines`
-- The description mentions "semantic search" and "NICE NG12" to orient the model.
-- The `query` parameter description includes example queries to demonstrate the expected format: combining symptoms with patient characteristics.
-- `top_k` is optional with a default, so the model can request more results for complex cases.
-
-## Iteration & Refinement
-
-This prompt was developed iteratively:
-
-1. **v1** — Basic instruction to assess patients. Problem: model would answer without calling tools.
-2. **v2** — Added explicit workflow steps. Problem: model would make one generic search query.
-3. **v3** (current) — Added example queries in tool descriptions and "one or more times" language. The model now makes targeted, symptom-specific searches and considers multiple cancer pathways.
-
-## Future Improvements (Phase 2)
-
-- Add a **chat mode** system prompt variant that maintains conversation context for follow-up questions.
-- Add few-shot examples of correct assessments to improve citation quality.
-- Consider using `response_mime_type="application/json"` with a formal Gemini response schema for guaranteed JSON output.
+### Future improvements
+- Few-shot examples for both prompts to improve citation quality.
+- `response_mime_type="application/json"` for guaranteed JSON output.
+- Chat: allow the model to request additional searches if initial retrieval is insufficient.
