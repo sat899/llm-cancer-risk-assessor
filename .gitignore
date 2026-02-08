@@ -1,0 +1,22 @@
+requirements.md
+changes.md
+architecture.md
+test.ipynb
+
+data/vector_db/
+
+# uv / Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.python-version
+
+# Environment files
+.env.local
+.env
+*.json
+!patients.json
