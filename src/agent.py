@@ -164,7 +164,7 @@ MAX_TOOL_ROUNDS = 10  # safety limit on iterative function calling
 
 
 class AssessmentAgent:
-    """Gemini 1.5 agent that assesses cancer risk via function calling."""
+    """Gemini agent that assesses cancer risk via function calling."""
 
     def __init__(self, model_name: Optional[str] = None):
         self.model_name = model_name or config.VERTEX_AI_MODEL_NAME

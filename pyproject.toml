@@ -1,7 +1,7 @@
 [project]
 name = "llm-cancer-risk-assessor"
 version = "1.0.0"
-description = "Clinical Decision Support Agent using Google Vertex AI (Gemini 1.5) and NICE NG12 Cancer Guidelines"
+description = "Clinical Decision Support Agent using Google Vertex AI (Gemini) and NICE NG12 Cancer Guidelines"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

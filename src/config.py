@@ -25,7 +25,7 @@ class Config:
     GOOGLE_CLOUD_LOCATION: str = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
     
     # Vertex AI Model Configuration
-    VERTEX_AI_MODEL_NAME: str = os.getenv("VERTEX_AI_MODEL_NAME", "gemini-1.5-pro")
+    VERTEX_AI_MODEL_NAME: str = os.getenv("VERTEX_AI_MODEL_NAME", "gemini-2.5-flash-lite")
     VERTEX_AI_EMBEDDING_MODEL: str = os.getenv(
         "VERTEX_AI_EMBEDDING_MODEL", 
         "text-embedding-004"
